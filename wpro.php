@@ -516,6 +516,8 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		$data['path'] = $this->upload_basedir . $data['subdir'];
 		$data['url'] = $data['baseurl'] . $data['subdir'];
 
+		$this->removeTemporaryLocalData($data['path']);
+
 //		$this->debug('-> RETURNS = ');
 //		$this->debug(print_r($data, true));
 
