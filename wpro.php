@@ -259,6 +259,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 	public $backend = null;
 	public $tempdir = '/tmp';
+	public $virtual_upload_dir = '';
 
 	function __construct() {
 		if (!defined('WPRO_ON') || !WPRO_ON) {
@@ -294,6 +295,19 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		$this->tempdir = sys_get_temp_dir();
 		if (substr($this->tempdir, -1) != '/') $this->tempdir = $this->tempdir . '/';
 
+		$this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
+
+		if($this->virtual_upload_dir!==''){
+			//add the route rule
+			add_action( 'init', array($this,'wpro_add_rewrite_rules' ));
+
+			//activate the features
+			$this->wpro_activate_directory_mapping();
+		}else{
+			//deactivate the mapping filters and functions
+			$this->wpro_deactivate_directory_mapping();
+		}
+
 	}
 
 	function is_trusted() {
@@ -326,6 +340,9 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_site_option('wpro-ftp-password', '');
 		add_site_option('wpro-ftp-pasvmode', '');
 		add_site_option('wpro-ftp-webroot', '');
+
+		//option for mapping S3 directory
+		add_site_option('wpro-virtual-upload-dir','');
 	}
 
 
@@ -349,6 +366,35 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 			if (isset($_POST[$allowedPostData])) $data = stripslashes($_POST[$allowedPostData]);
 			update_site_option($allowedPostData, $data);
 		}
+
+		//for virtual directory mapping
+		if(isset($_POST['wpro-virtual-upload-dir'])){
+			$dir_name = $_POST['wpro-virtual-upload-dir'];
+			//sanitize
+			//trim and remove double forward
+			$dir_name = trim(preg_replace('{//*}','/',$dir_name));
+
+			//remove forward slashes at start and end.
+			$dir_name = preg_replace('{^/|/$}', '', $dir_name);
+
+			//check if valid
+			if (preg_match('/^([A-Za-z\/|a-zA-Z_-|a-zA-Z0-9_-]*)$/', $dir_name)) {
+			    update_site_option('wpro-virtual-upload-dir', $dir_name);
+			    $this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
+
+			    if($this->virtual_upload_dir !== ''){
+			    	//register the routes
+			    	$this->wpro_route_activate();
+				}else{
+					//deactivate the routes
+					$this->wpro_route_deactivate();
+				}
+
+			} else {
+				wp_die ( __ ('Invalid Wordpress Virtual Upload Directory.'));    
+			}
+		}
+
 		header('Location: ' . admin_url('network/settings.php?page=wpro&updated=true'));
 		exit();
 	}
@@ -381,7 +427,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				<div id="icon-plugins" class="icon32"><br /></div>
 				<h2>WP Read-Only (WPRO)</h2>
 
-				<?php if ($_GET['updated']) { ?>
+				<?php if (isset($_GET['updated']) && $_GET['updated']) { ?>
 					<div id="message" class="updated">
 						<p>Options saved.</p>
 					</div>
@@ -449,6 +495,16 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 										?>
 									</select> 
 								</td>
+							</tr>
+							<tr>
+								<th><label for="wpro-virtual-upload-dir">Virtual Upload Directory</label></th>
+								<td>
+									<input name="wpro-virtual-upload-dir" id="wpro-virtual-upload-dir" type="text" value="<?php echo wpro_get_option('wpro-virtual-upload-dir'); ?>" class="regular-text code" placeholder="wp-content/uploads"/>
+									<p class="description">Instead of showing the S3 directory, map it do a virtual directory.</p>
+									<p class="description">*Permalinks must be set to "DEFAULT"</p>
+									<p>New format will be:  %virtual directory%/%year%/%month%/%file%. </p>
+									
+								</td> 
 							</tr>
 						</table>
 					</div>
@@ -708,6 +764,201 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 		return $file;
 	}
+
+	/**
+	 * WPRO virtual directory mapping feature functions
+	 * Contains the function needed to map a virtual directory to hide S3 references
+	 * This will not be activated if Virtual Directory is set to null in options 
+	 */
+	/**
+	 * function wpro_route_activation
+	 *
+	 * Register the rewrite rule
+	 */
+	function wpro_route_activate(){
+	  global $wp_rewrite;
+	  $this->wpro_add_rewrite_rules();
+	  $wp_rewrite->flush_rules();
+	}
+
+	function wpro_route_deactivate() {
+	  // Remove the rewrite rule on api deactivation as well
+	  global $wp_rewrite;
+	  $wp_rewrite->flush_rules();
+	}
+	/**
+	 * function wpro_reroute_add_rewrite_rules
+	 *
+	 * add a new rewrite rule based on the given virtual upload directory
+	 * maps every request configured in options to the plugin public.php file where it fetches and generates the image
+	 * 
+	 */
+	function wpro_add_rewrite_rules(){
+		global $wp_rewrite;
+	    add_rewrite_rule( '^'.$this->virtual_upload_dir.'/([0-9]{4})/([0-9]{1,2})/([^/]*)',
+		'index.php?uploads=true&year=$matches[1]&month=$matches[2]&file=$matches[3]', 'top' );
+	}
+
+	/**
+	 * function wpro_activate_directory_mapping
+	 *
+	 * Contains action/filter hooks to map the virtual directory
+	 */
+	function wpro_activate_directory_mapping(){
+		//register the query vars
+		add_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
+
+		//handle each file requests
+		add_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
+
+		//handle (overwrite) WPRO upload_dir 
+		add_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir')); //revert to S3 directory when uploading
+		remove_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
+		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
+		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
+		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
+	}
+
+	/**
+	 * Remove the filters applied for virtual directory mapping
+	 */
+	function wpro_deactivate_directory_mapping(){
+		//remove actions
+		remove_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
+		remove_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
+
+		//remove filters
+		remove_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir'));
+		remove_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
+		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
+		remove_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
+
+		//put back wpro default filters
+		add_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
+		add_filter('upload_dir', array($this, 'upload_dir'));
+
+
+	}
+
+	/**
+	 * Functions for mapping to the virtual directory
+	 */
+	/**
+	 * function wpro_reroute_add_query_vars
+	 * add the custom query vars for fetching the format
+	 */
+	function wpro_reroute_add_query_vars($query_vars){
+		$query_vars[] = 'uploads';
+		$query_vars[] = 'year';
+		$query_vars[] = 'month'; 
+		//$query_vars[] = 'day';
+		$query_vars[] = 'file';
+    	return $query_vars;
+	}
+
+	/**
+	 * function wpro_reroute_parse_request
+	 *
+	 * The function that will evaluate the new route and redirect to public.php file that will process the file
+	 */
+	function wpro_reroute_parse_request(&$wp){
+		if ( array_key_exists( 'uploads', $wp->query_vars ) ) {
+        	include( dirname( __FILE__ ) . '/public.php' );
+        	exit();
+    	}
+	}
+
+	/**
+	 * For every upload, revert back to S3 directory
+	 */
+	function wpro_reroute_remove_virtual_dir($param){
+		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
+		return $param;
+	}
+
+	/**
+	 * For reference to image edit, revert back to S3 directory
+	 */
+	function wpro_reroute_load_image_to_edit_path($filepath){
+		//revert back to S3 directory
+		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
+		$upload_dir = wp_upload_dir();
+
+		$s3_upload_dir = $upload_dir['baseurl'];
+
+		$pattern = get_site_url() . '/' .$this->virtual_upload_dir;
+
+		//use s3 dir as the $filepath
+		$filepath = str_replace($pattern, $s3_upload_dir, $filepath);
+
+		$this->debug('WordpressReadOnly::load_image_to_edit_path("' . $filepath . '");');
+
+		//create tmp file
+		if (substr($filepath, 0, 7) == 'http://') {
+
+			$ending = '';
+			if (preg_match('/\.([^\.\/]+)$/', $filepath, $regs)) $ending = '.' . $regs[1];
+
+			$tmpfile = $this->tempdir . 'wpro' . time() . rand(0, 999999) . $ending;
+			while (file_exists($tmpfile)) $tmpfile = $this->tempdir . 'wpro' . time() . rand(0, 999999) . $ending;
+
+			$filepath = $this->url_normalizer($filepath);
+
+			$this->debug('-> Loading file from: ' . $filepath);
+			$this->debug('-> Storing file at: ' . $tmpfile);
+
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_URL, $filepath);
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+			curl_setopt($ch, CURLOPT_AUTOREFERER, true);
+
+			$fh = fopen($tmpfile, 'w');
+			fwrite($fh, curl_exec_follow($ch));
+			fclose($fh);
+
+			$this->removeTemporaryLocalData($tmpfile);
+
+			return $tmpfile;
+		}
+
+		return $filepath;
+	}
+
+	/**
+	 * Changes the upload directory to the virtual one
+	 */
+	function wpro_reroute_upload_dir($data){
+		//apply the routes
+		$this->wpro_route_activate();
+
+		//replace with virtual directory
+		$site_url = get_site_url();
+
+		$data['baseurl'] = $site_url . '/'. $this->virtual_upload_dir;
+		$data['url'] = $data['baseurl'] . $data['subdir'];
+		
+		return $data;
+
+	}
+
+	/**
+	 * After file edit, if there is a virtual directory setup, url should point to the virtual one.
+	 */
+	function wpro_reroute_get_attachment_url($data){
+		$upload_dir = wp_upload_dir();
+
+		$s3_upload_dir = $upload_dir['baseurl'];
+
+		$pattern = $s3_upload_dir;
+
+		$mapped = get_site_url() . '/' .$this->virtual_upload_dir;
+
+		$data = str_replace($s3_upload_dir,$mapped, $data);
+
+		return $data;
+
+	}
+
 
 	function shutdown() {
 		$this->debug('WordpressReadOnly::shutdown()');
