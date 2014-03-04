@@ -501,7 +501,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 								<td>
 									<input name="wpro-virtual-upload-dir" id="wpro-virtual-upload-dir" type="text" value="<?php echo wpro_get_option('wpro-virtual-upload-dir'); ?>" class="regular-text code" placeholder="wp-content/uploads"/>
 									<p class="description">Instead of showing the S3 directory, map it do a virtual directory.</p>
-									<p class="description">*Permalinks must be set to "DEFAULT"</p>
+									<p class="description">*Permalink settings of a site must NOT be set to "Default"</p>
 									<p>New format will be:  %virtual directory%/%year%/%month%/%file%. </p>
 									
 								</td> 
