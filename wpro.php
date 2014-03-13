@@ -817,6 +817,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
 		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
 		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
+		
 	}
 
 	/**
@@ -951,8 +952,18 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 		$pattern = $s3_upload_dir;
 
-		$mapped =  '/' .$this->virtual_upload_dir;
+		$mapped = get_site_url() . '/' .$this->virtual_upload_dir;
 
+		//check the referer and add some hooks
+		$url_parsed = parse_url(wp_get_referer());
+		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
+		
+		//hook for background image directory (using relative path)
+		if(isset($url_parts['page'])){
+			if($url_parts['page']=='custom-background'){
+				$mapped = '/' .$this->virtual_upload_dir;		
+			}
+		}
 		$data = str_replace($s3_upload_dir,$mapped, $data);
 
 		return $data;
