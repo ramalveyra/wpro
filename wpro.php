@@ -951,7 +951,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 		$pattern = $s3_upload_dir;
 
-		$mapped = get_site_url() . '/' .$this->virtual_upload_dir;
+		$mapped =  '/' .$this->virtual_upload_dir;
 
 		$data = str_replace($s3_upload_dir,$mapped, $data);
 
@@ -998,5 +998,4 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 			}
 		}
 	}
-
 }
