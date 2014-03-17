@@ -817,7 +817,14 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
 		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
 		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
+
+		add_filter('add_attachment',array($this,'wpro_add_attachment'));//will use relative path for guid
+		//Themes customize window hooks
 		
+		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
+		//background image link fixes
+		add_action('wp_head', array($this,'wpro_reroute_buffer_start'));
+		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 	}
 
 	/**
@@ -827,6 +834,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		//remove actions
 		remove_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
 		remove_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
+
+		//remove background image link fixes
+		remove_action('wp_head', array($this,'wpro_reroute_buffer_start'));
+		remove_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 
 		//remove filters
 		remove_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir'));
@@ -838,6 +849,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
 		add_filter('upload_dir', array($this, 'upload_dir'));
 
+		remove_filter('add_attachment',array($this,'wpro_add_attachment'));
+
+		//revert the theme customize background settings
+		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
 
 	}
 
@@ -935,7 +950,20 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		//replace with virtual directory
 		$site_url = get_site_url();
 
+
 		$data['baseurl'] = $site_url . '/'. $this->virtual_upload_dir;
+
+		//check the referer and add some hooks
+		$url_parsed = parse_url(wp_get_referer());
+		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
+		
+		//hook for background image directory (using relative path)
+		if(isset($url_parts['page'])){
+			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
+				$data['baseurl'] =  $site_url . '/'. $this->virtual_upload_dir;
+			}
+		}
+
 		$data['url'] = $data['baseurl'] . $data['subdir'];
 		
 		return $data;
@@ -960,14 +988,112 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		
 		//hook for background image directory (using relative path)
 		if(isset($url_parts['page'])){
-			if($url_parts['page']=='custom-background'){
-				$mapped = '/' .$this->virtual_upload_dir;		
+			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
+				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;		
 			}
 		}
+
 		$data = str_replace($s3_upload_dir,$mapped, $data);
 
 		return $data;
 
+	}
+
+	function wpro_reroute_customize_register($wp_customize){
+		//handle background changes
+		$wp_upload_dir = wp_upload_dir();
+		$s3_upload_dir = $wp_upload_dir['baseurl'];
+		$pattern = $s3_upload_dir;
+		
+
+		$backgrounds = get_posts( array(
+			'post_type'  => 'attachment',
+			'meta_key'   => '_wp_attachment_is_custom_background',
+			'meta_value' => $wp_customize->get_stylesheet(),
+			'orderby'    => 'none',
+			'nopaging'   => true,
+		) );
+		
+		foreach($backgrounds as $background){
+			if($this->virtual_upload_dir){
+				//Get S3 url
+				if (wpro_get_option('wpro-aws-virthost')) {
+					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
+				} else {
+					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
+				}
+				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;
+				
+				
+				if(strpos($background->guid,$mapped)==FALSE){
+					$background->guid = str_replace($s3_url,$mapped, $background->guid);
+					wp_update_post($background);
+				}
+			}else{
+				if(strpos($background->guid,$s3_upload_dir)==false){
+					$background->guid = $s3_upload_dir.(substr($background->guid, strpos($background->guid,$wp_upload_dir['subdir'])));
+					wp_update_post($background);
+				}
+			}
+		}
+	}
+
+	function wpro_add_attachment($id){
+		$url_parsed = parse_url(wp_get_referer());
+		if($this->virtual_upload_dir && isset($url_parsed['path']) && $url_parsed['path'] == '/wp-admin/customize.php'){
+			$upload_dir = wp_upload_dir();
+			$s3_upload_dir = $upload_dir['baseurl'];
+			$pattern = $s3_upload_dir;
+			$mapped = get_site_url().'/' .$this->virtual_upload_dir;
+			$post=get_post($id);
+			$post->guid = str_replace($s3_upload_dir,$mapped, $post->guid);
+			wp_update_post($post);
+		}
+	}
+
+	/**
+	* Function to change the background image url for mapped directories
+	*
+	* @access public 
+	* @return void
+	*/
+	function wpro_reroute_buffer_start() 
+	{ 
+		if ($this->virtual_upload_dir)
+			ob_start(array($this,'remove_background_url')); 
+	}
+
+	/**
+	* end the buffer / flush
+	*
+	* @access public 
+	* @return void
+	*/
+	function wpro_reroute_buffer_end() 
+	{ 
+		if ($this->virtual_upload_dir)
+			ob_end_flush(); 
+	}
+
+	function remove_background_url($buffer) 
+	{
+		if ($this->virtual_upload_dir){
+			$upload_dir = wp_upload_dir();
+			//check if S3
+			if (wpro_get_option('wpro-aws-virthost')) {
+				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
+			} else {
+				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
+			}
+
+			if(strpos($buffer,$s3_url)){
+				return str_replace('background-image: url(\''.$s3_url, 'background-image: url(\'/'.$this->virtual_upload_dir, $buffer);	
+			}else{
+				return preg_replace('/background-image: url\(\'(http|https|ftp|ftps)\:\/\/[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,3}(\/\S*)?\//','background-image: url(\'/'.$this->virtual_upload_dir . $upload_dir['subdir'].'/',$buffer);
+			}
+		}else{
+			return $buffer;
+		}
 	}
 
 
