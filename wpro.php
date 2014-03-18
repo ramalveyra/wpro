@@ -383,7 +383,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				//Do another check if virtual directory is an actual directory
 				$wp_home_path = get_home_path();
 				
-				if(is_dir($wp_home_path. '/' .$dir_name)){
+				if(is_dir($wp_home_path. '/' .$dir_name) && $dir_name!==''){
 					wp_die ( __ ('This directory cannot be used as a virtual directory. Please select a different one.'));    
 				}
 
@@ -875,7 +875,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Init checkes when virtual directory is enabled
 	 */
 	function wpro_reroute_admin_init(){
-		if (get_option('permalink_structure') == ''){
+		if (get_option('permalink_structure') == '' && $this->virtual_upload_dir){
 			add_action('admin_notices', array($this,'wpro_reroute_permalink_notice'));
 		}
 	}
