@@ -379,6 +379,14 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 			//check if valid
 			if (preg_match('/^([A-Za-z\/|a-zA-Z_-|a-zA-Z0-9_-]*)$/', $dir_name)) {
+
+				//Do another check if virtual directory is an actual directory
+				$wp_home_path = get_home_path();
+				
+				if(is_dir($wp_home_path. '/' .$dir_name)){
+					wp_die ( __ ('This directory cannot be used as a virtual directory. Please select a different one.'));    
+				}
+
 			    update_site_option('wpro-virtual-upload-dir', $dir_name);
 			    $this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
 
