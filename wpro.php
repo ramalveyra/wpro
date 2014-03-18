@@ -403,8 +403,11 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 			}
 		}
 
-		header('Location: ' . admin_url('network/settings.php?page=wpro&updated=true'));
-		exit();
+		if(is_multisite()){
+			wp_redirect(admin_url('network/settings.php?page=wpro&updated=true'));exit();
+		}else{
+			wp_redirect( admin_url('options-general.php?page=wpro&updated=true'));exit();
+		}
 	}
 
 	function admin_form() {
@@ -435,11 +438,13 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				<div id="icon-plugins" class="icon32"><br /></div>
 				<h2>WP Read-Only (WPRO)</h2>
 
-				<?php if (isset($_GET['updated']) && $_GET['updated']) { ?>
-					<div id="message" class="updated">
-						<p>Options saved.</p>
-					</div>
-				<?php } ?>
+				<?php if(is_multisite()):?>
+					<?php if (isset($_GET['updated']) && $_GET['updated']) { ?>
+						<div id="message" class="updated">
+							<p><strong>Settings saved.</strong></p>
+						</div>
+					<?php } ?>
+				<?php endif;?>
 
 				<form name="wpro-settings-form" action="<?php echo admin_url('admin-post.php');?>" method="post">
 					<input type="hidden" name="action" value="wpro_settings_POST" />
