@@ -805,6 +805,9 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains action/filter hooks to map the virtual directory
 	 */
 	function wpro_activate_directory_mapping(){
+		//init checkes when virtual upload directory is enabled
+		add_action('admin_init', array($this,'wpro_reroute_admin_init'));
+
 		//register the query vars
 		add_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
 
@@ -854,6 +857,28 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		//revert the theme customize background settings
 		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
 
+	}
+
+	/**
+	 * Functions on init (virtual upload directory enabled)
+	 */
+	/**
+	 * function wpro_reroute_admin_init
+	 * Init checkes when virtual directory is enabled
+	 */
+	function wpro_reroute_admin_init(){
+		if (get_option('permalink_structure') == ''){
+			add_action('admin_notices', array($this,'wpro_reroute_permalink_notice'));
+		}
+	}
+
+	/**
+	 * Adds notice if permalinks are set to default when virtual dir is enabled
+	 */
+	function wpro_reroute_permalink_notice(){
+		$message = 'WPRO Virtual Upload Directory was enabled but permalinks for this site was set to <strong>Default</strong>. For the Virtual Upload Directory to work, select a custom permalink other than <strong>Default</strong>.';
+
+		echo '<div id="admin-settings-warning-box" class="update-nag"><p><strong>Warning</strong> – '.$message.'</p></div>';
 	}
 
 	/**
