@@ -379,6 +379,14 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 			//check if valid
 			if (preg_match('/^([A-Za-z\/|a-zA-Z_-|a-zA-Z0-9_-]*)$/', $dir_name)) {
+
+				//Do another check if virtual directory is an actual directory
+				$wp_home_path = get_home_path();
+				
+				if(is_dir($wp_home_path. '/' .$dir_name) && $dir_name!==''){
+					wp_die ( __ ('This directory cannot be used as a virtual directory. Please select a different one.'));    
+				}
+
 			    update_site_option('wpro-virtual-upload-dir', $dir_name);
 			    $this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
 
@@ -395,8 +403,11 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 			}
 		}
 
-		header('Location: ' . admin_url('network/settings.php?page=wpro&updated=true'));
-		exit();
+		if(is_multisite()){
+			wp_redirect(admin_url('network/settings.php?page=wpro&updated=true'));exit();
+		}else{
+			wp_redirect( admin_url('options-general.php?page=wpro&updated=true'));exit();
+		}
 	}
 
 	function admin_form() {
@@ -427,11 +438,13 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				<div id="icon-plugins" class="icon32"><br /></div>
 				<h2>WP Read-Only (WPRO)</h2>
 
-				<?php if (isset($_GET['updated']) && $_GET['updated']) { ?>
-					<div id="message" class="updated">
-						<p>Options saved.</p>
-					</div>
-				<?php } ?>
+				<?php if(is_multisite()):?>
+					<?php if (isset($_GET['updated']) && $_GET['updated']) { ?>
+						<div id="message" class="updated">
+							<p><strong>Settings saved.</strong></p>
+						</div>
+					<?php } ?>
+				<?php endif;?>
 
 				<form name="wpro-settings-form" action="<?php echo admin_url('admin-post.php');?>" method="post">
 					<input type="hidden" name="action" value="wpro_settings_POST" />
@@ -501,7 +514,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 								<td>
 									<input name="wpro-virtual-upload-dir" id="wpro-virtual-upload-dir" type="text" value="<?php echo wpro_get_option('wpro-virtual-upload-dir'); ?>" class="regular-text code" placeholder="wp-content/uploads"/>
 									<p class="description">Instead of showing the S3 directory, map it do a virtual directory.</p>
-									<p class="description">*Permalinks must be set to "DEFAULT"</p>
+									<p class="description">*Permalink settings of a site must NOT be set to "Default"</p>
 									<p>New format will be:  %virtual directory%/%year%/%month%/%file%. </p>
 									
 								</td> 
@@ -805,6 +818,9 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains action/filter hooks to map the virtual directory
 	 */
 	function wpro_activate_directory_mapping(){
+		//init checkes when virtual upload directory is enabled
+		add_action('admin_init', array($this,'wpro_reroute_admin_init'));
+
 		//register the query vars
 		add_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
 
@@ -817,6 +833,14 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
 		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
 		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
+
+		add_filter('add_attachment',array($this,'wpro_add_attachment'));//will use relative path for guid
+		//Themes customize window hooks
+		
+		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
+		//background image link fixes
+		add_action('wp_head', array($this,'wpro_reroute_buffer_start'));
+		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 	}
 
 	/**
@@ -826,6 +850,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		//remove actions
 		remove_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
 		remove_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
+
+		//remove background image link fixes
+		remove_action('wp_head', array($this,'wpro_reroute_buffer_start'));
+		remove_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 
 		//remove filters
 		remove_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir'));
@@ -837,7 +865,33 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		add_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
 		add_filter('upload_dir', array($this, 'upload_dir'));
 
+		remove_filter('add_attachment',array($this,'wpro_add_attachment'));
 
+		//revert the theme customize background settings
+		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
+
+	}
+
+	/**
+	 * Functions on init (virtual upload directory enabled)
+	 */
+	/**
+	 * function wpro_reroute_admin_init
+	 * Init checkes when virtual directory is enabled
+	 */
+	function wpro_reroute_admin_init(){
+		if (get_option('permalink_structure') == '' && $this->virtual_upload_dir){
+			add_action('admin_notices', array($this,'wpro_reroute_permalink_notice'));
+		}
+	}
+
+	/**
+	 * Adds notice if permalinks are set to default when virtual dir is enabled
+	 */
+	function wpro_reroute_permalink_notice(){
+		$message = 'WPRO Virtual Upload Directory was enabled but permalinks for this site was set to <strong>Default</strong>. For the Virtual Upload Directory to work, select a custom permalink other than <strong>Default</strong>.';
+
+		echo '<div id="admin-settings-warning-box" class="update-nag"><p><strong>Warning</strong> – '.$message.'</p></div>';
 	}
 
 	/**
@@ -934,7 +988,20 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		//replace with virtual directory
 		$site_url = get_site_url();
 
+
 		$data['baseurl'] = $site_url . '/'. $this->virtual_upload_dir;
+
+		//check the referer and add some hooks
+		$url_parsed = parse_url(wp_get_referer());
+		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
+		
+		//hook for background image directory (using relative path)
+		if(isset($url_parts['page'])){
+			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
+				$data['baseurl'] =  $site_url . '/'. $this->virtual_upload_dir;
+			}
+		}
+
 		$data['url'] = $data['baseurl'] . $data['subdir'];
 		
 		return $data;
@@ -953,10 +1020,118 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 		$mapped = get_site_url() . '/' .$this->virtual_upload_dir;
 
+		//check the referer and add some hooks
+		$url_parsed = parse_url(wp_get_referer());
+		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
+		
+		//hook for background image directory (using relative path)
+		if(isset($url_parts['page'])){
+			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
+				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;		
+			}
+		}
+
 		$data = str_replace($s3_upload_dir,$mapped, $data);
 
 		return $data;
 
+	}
+
+	function wpro_reroute_customize_register($wp_customize){
+		//handle background changes
+		$wp_upload_dir = wp_upload_dir();
+		$s3_upload_dir = $wp_upload_dir['baseurl'];
+		$pattern = $s3_upload_dir;
+		
+
+		$backgrounds = get_posts( array(
+			'post_type'  => 'attachment',
+			'meta_key'   => '_wp_attachment_is_custom_background',
+			'meta_value' => $wp_customize->get_stylesheet(),
+			'orderby'    => 'none',
+			'nopaging'   => true,
+		) );
+		
+		foreach($backgrounds as $background){
+			if($this->virtual_upload_dir){
+				//Get S3 url
+				if (wpro_get_option('wpro-aws-virthost')) {
+					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
+				} else {
+					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
+				}
+				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;
+				
+				
+				if(strpos($background->guid,$mapped)==FALSE){
+					$background->guid = str_replace($s3_url,$mapped, $background->guid);
+					wp_update_post($background);
+				}
+			}else{
+				if(strpos($background->guid,$s3_upload_dir)==false){
+					$background->guid = $s3_upload_dir.(substr($background->guid, strpos($background->guid,$wp_upload_dir['subdir'])));
+					wp_update_post($background);
+				}
+			}
+		}
+	}
+
+	function wpro_add_attachment($id){
+		$url_parsed = parse_url(wp_get_referer());
+		if($this->virtual_upload_dir && isset($url_parsed['path']) && $url_parsed['path'] == '/wp-admin/customize.php'){
+			$upload_dir = wp_upload_dir();
+			$s3_upload_dir = $upload_dir['baseurl'];
+			$pattern = $s3_upload_dir;
+			$mapped = get_site_url().'/' .$this->virtual_upload_dir;
+			$post=get_post($id);
+			$post->guid = str_replace($s3_upload_dir,$mapped, $post->guid);
+			wp_update_post($post);
+		}
+	}
+
+	/**
+	* Function to change the background image url for mapped directories
+	*
+	* @access public 
+	* @return void
+	*/
+	function wpro_reroute_buffer_start() 
+	{ 
+		if ($this->virtual_upload_dir)
+			ob_start(array($this,'remove_background_url')); 
+	}
+
+	/**
+	* end the buffer / flush
+	*
+	* @access public 
+	* @return void
+	*/
+	function wpro_reroute_buffer_end() 
+	{ 
+		if ($this->virtual_upload_dir)
+			ob_end_flush(); 
+	}
+
+	function remove_background_url($buffer) 
+	{
+		if ($this->virtual_upload_dir){
+			$upload_dir = wp_upload_dir();
+			//check if S3
+			if (wpro_get_option('wpro-aws-virthost')) {
+				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
+			} else {
+				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
+			}
+
+			if(strpos($buffer,$s3_url)){
+				return str_replace('background-image: url(\''.$s3_url, 'background-image: url(\'/'.$this->virtual_upload_dir, $buffer);	
+			}else{
+				return preg_replace('/background-image: url\(\'(http|https|ftp|ftps)\:\/\/[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,3}(\/\S*)?\//','background-image: url(\'/'.$this->virtual_upload_dir . $upload_dir['subdir'].'/',$buffer);
+			}
+		}else{
+			return $buffer;
+		}
 	}
 
 
@@ -998,5 +1173,4 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 			}
 		}
 	}
-
 }
