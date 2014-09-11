@@ -4,7 +4,7 @@ Plugin Name: L7 WPRO
 Plugin URI: https://github.com/Link7/wpro
 Description: This is a fork of the WPRO plugin with added enhancements. WPRO is a Plugin for running your Wordpress site without Write Access to the web directory. Amazon S3 is used for uploads/binary storage. This plugin was made with cluster/load balancing server setups in mind - where you do not want your WordPress to write anything to the local web directory.
 Author: Link7
-Version: 1.2
+Version: 1.3
 Credits
 alfreddatakillen (wpro)
 http://nurd.nu/
@@ -302,14 +302,9 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		if($this->virtual_upload_dir!==''){
 			//add the route rule
 			add_action( 'init', array($this,'wpro_add_rewrite_rules' ));
-
 			//activate the features
 			$this->wpro_activate_directory_mapping();
-		}else{
-			//deactivate the mapping filters and functions
-			$this->wpro_deactivate_directory_mapping();
 		}
-
 	}
 
 	function is_trusted() {
@@ -518,6 +513,8 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 									<p class="description">Instead of showing the S3 directory, map it do a virtual directory.</p>
 									<p class="description">*Permalink settings of a site must NOT be set to "Default"</p>
 									<p>New format will be:  %virtual directory%/%year%/%month%/%file%. </p>
+									<p>Note: Virtual Mapping won't work unless you have setup a proper routing on your server</p>
+									<p>The Virtual Directory should be the one used in this configuration ex. on nginx: "location ~* ^/wp-content/uploads/(.*)"</p>
 									
 								</td> 
 							</tr>
@@ -820,27 +817,6 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains action/filter hooks to map the virtual directory
 	 */
 	function wpro_activate_directory_mapping(){
-		//init checkes when virtual upload directory is enabled
-		add_action('admin_init', array($this,'wpro_reroute_admin_init'));
-
-		//register the query vars
-		add_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
-
-		//handle each file requests
-		add_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
-
-		//handle (overwrite) WPRO upload_dir 
-		add_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir')); //revert to S3 directory when uploading
-		remove_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
-		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
-		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
-		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
-
-		add_filter('add_attachment',array($this,'wpro_add_attachment'));//will use relative path for guid
-		//Themes customize window hooks
-		
-		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
-		//background image link fixes
 		add_action('wp_head', array($this,'wpro_reroute_buffer_start'));
 		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 	}
@@ -849,29 +825,9 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Remove the filters applied for virtual directory mapping
 	 */
 	function wpro_deactivate_directory_mapping(){
-		//remove actions
-		remove_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
-		remove_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
-
 		//remove background image link fixes
 		remove_action('wp_head', array($this,'wpro_reroute_buffer_start'));
 		remove_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
-
-		//remove filters
-		remove_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir'));
-		remove_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
-		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
-		remove_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
-
-		//put back wpro default filters
-		add_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
-		add_filter('upload_dir', array($this, 'upload_dir'));
-
-		remove_filter('add_attachment',array($this,'wpro_add_attachment'));
-
-		//revert the theme customize background settings
-		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
-
 	}
 
 	/**
@@ -893,7 +849,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	function wpro_reroute_permalink_notice(){
 		$message = 'WPRO Virtual Upload Directory was enabled but permalinks for this site was set to <strong>Default</strong>. For the Virtual Upload Directory to work, select a custom permalink other than <strong>Default</strong>.';
 
-		echo '<div id="admin-settings-warning-box" class="update-nag"><p><strong>Warning</strong> – '.$message.'</p></div>';
+		echo '<div id="admin-settings-warning-box" class="update-nag"><p><strong>Warning</strong> '.$message.'</p></div>';
 	}
 
 	/**
@@ -1117,8 +1073,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 	function remove_background_url($buffer) 
 	{
+		global $current_domain, $current_blog;
+
 		if ($this->virtual_upload_dir){
-			$upload_dir = wp_upload_dir();
+			
 			//check if S3
 			if (wpro_get_option('wpro-aws-virthost')) {
 				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
@@ -1126,11 +1084,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
 			}
 
-			if(strpos($buffer,$s3_url)){
-				return str_replace('background-image: url(\''.$s3_url, 'background-image: url(\'/'.$this->virtual_upload_dir, $buffer);	
-			}else{
-				return preg_replace('/background-image: url\(\'(http|https|ftp|ftps)\:\/\/[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,3}(\/\S*)?\//','background-image: url(\'/'.$this->virtual_upload_dir . $upload_dir['subdir'].'/',$buffer);
-			}
+			//$s3_url = "http://".$s3_url;
+			$buffer = str_replace($s3_url, 'http://'.$current_blog->domain.'/'.$this->virtual_upload_dir, $buffer);
+			
+			return $buffer;
 		}else{
 			return $buffer;
 		}
