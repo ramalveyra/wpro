@@ -4,7 +4,7 @@ Plugin Name: L7 WPRO
 Plugin URI: https://github.com/Link7/wpro
 Description: This is a fork of the WPRO plugin with added enhancements. WPRO is a Plugin for running your Wordpress site without Write Access to the web directory. Amazon S3 is used for uploads/binary storage. This plugin was made with cluster/load balancing server setups in mind - where you do not want your WordPress to write anything to the local web directory.
 Author: Link7
-Version: 1.2
+Version: 1.3
 Credits
 alfreddatakillen (wpro)
 http://nurd.nu/
@@ -300,16 +300,8 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 		$this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
 
 		if($this->virtual_upload_dir!==''){
-			//add the route rule
-			add_action( 'init', array($this,'wpro_add_rewrite_rules' ));
-
-			//activate the features
 			$this->wpro_activate_directory_mapping();
-		}else{
-			//deactivate the mapping filters and functions
-			$this->wpro_deactivate_directory_mapping();
 		}
-
 	}
 
 	function is_trusted() {
@@ -391,14 +383,6 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 			    update_site_option('wpro-virtual-upload-dir', $dir_name);
 			    $this->virtual_upload_dir = wpro_get_option('wpro-virtual-upload-dir');
-
-			    if($this->virtual_upload_dir !== ''){
-			    	//register the routes
-			    	$this->wpro_route_activate();
-				}else{
-					//deactivate the routes
-					$this->wpro_route_deactivate();
-				}
 
 			} else {
 				wp_die ( __ ('Invalid Wordpress Virtual Upload Directory.'));    
@@ -518,6 +502,8 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 									<p class="description">Instead of showing the S3 directory, map it do a virtual directory.</p>
 									<p class="description">*Permalink settings of a site must NOT be set to "Default"</p>
 									<p>New format will be:  %virtual directory%/%year%/%month%/%file%. </p>
+									<p>Note: Virtual Mapping won't work unless you have setup a proper routing on your server</p>
+									<p>The Virtual Directory should be the one used in this configuration ex. on nginx: "location ~* ^/wp-content/uploads/(.*)"</p>
 									
 								</td> 
 							</tr>
@@ -785,34 +771,7 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains the function needed to map a virtual directory to hide S3 references
 	 * This will not be activated if Virtual Directory is set to null in options 
 	 */
-	/**
-	 * function wpro_route_activation
-	 *
-	 * Register the rewrite rule
-	 */
-	function wpro_route_activate(){
-	  global $wp_rewrite;
-	  $this->wpro_add_rewrite_rules();
-	  $wp_rewrite->flush_rules();
-	}
-
-	function wpro_route_deactivate() {
-	  // Remove the rewrite rule on api deactivation as well
-	  global $wp_rewrite;
-	  $wp_rewrite->flush_rules();
-	}
-	/**
-	 * function wpro_reroute_add_rewrite_rules
-	 *
-	 * add a new rewrite rule based on the given virtual upload directory
-	 * maps every request configured in options to the plugin public.php file where it fetches and generates the image
-	 * 
-	 */
-	function wpro_add_rewrite_rules(){
-		global $wp_rewrite;
-	    add_rewrite_rule( '^'.$this->virtual_upload_dir.'/([0-9]{4})/([0-9]{1,2})/([^/]*)',
-		'index.php?uploads=true&year=$matches[1]&month=$matches[2]&file=$matches[3]', 'top' );
-	}
+	
 
 	/**
 	 * function wpro_activate_directory_mapping
@@ -820,277 +779,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains action/filter hooks to map the virtual directory
 	 */
 	function wpro_activate_directory_mapping(){
-		//init checkes when virtual upload directory is enabled
-		add_action('admin_init', array($this,'wpro_reroute_admin_init'));
-
-		//register the query vars
-		add_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
-
-		//handle each file requests
-		add_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
-
-		//handle (overwrite) WPRO upload_dir 
-		add_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir')); //revert to S3 directory when uploading
-		remove_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
-		add_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
-		add_filter('upload_dir', array($this, 'wpro_reroute_upload_dir')); // Set the virtual directory masking
-		add_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
-
-		add_filter('add_attachment',array($this,'wpro_add_attachment'));//will use relative path for guid
-		//Themes customize window hooks
-		
-		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
-		//background image link fixes
 		add_action('wp_head', array($this,'wpro_reroute_buffer_start'));
 		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
 	}
-
-	/**
-	 * Remove the filters applied for virtual directory mapping
-	 */
-	function wpro_deactivate_directory_mapping(){
-		//remove actions
-		remove_action( 'query_vars', array($this,'wpro_reroute_add_query_vars' ));
-		remove_action( 'parse_request', array($this,'wpro_reroute_parse_request' ));
-
-		//remove background image link fixes
-		remove_action('wp_head', array($this,'wpro_reroute_buffer_start'));
-		remove_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
-
-		//remove filters
-		remove_filter('wp_handle_upload_prefilter', array($this, 'wpro_reroute_remove_virtual_dir'));
-		remove_filter('load_image_to_edit_path', array($this, 'wpro_reroute_load_image_to_edit_path'));
-		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
-		remove_filter('wp_get_attachment_url',array($this,'wpro_reroute_get_attachment_url'));
-
-		//put back wpro default filters
-		add_filter('load_image_to_edit_path',array($this, 'load_image_to_edit_path'));
-		add_filter('upload_dir', array($this, 'upload_dir'));
-
-		remove_filter('add_attachment',array($this,'wpro_add_attachment'));
-
-		//revert the theme customize background settings
-		add_action('customize_register',array($this,'wpro_reroute_customize_register'));
-
-	}
-
-	/**
-	 * Functions on init (virtual upload directory enabled)
-	 */
-	/**
-	 * function wpro_reroute_admin_init
-	 * Init checkes when virtual directory is enabled
-	 */
-	function wpro_reroute_admin_init(){
-		if (get_option('permalink_structure') == '' && $this->virtual_upload_dir){
-			add_action('admin_notices', array($this,'wpro_reroute_permalink_notice'));
-		}
-	}
-
-	/**
-	 * Adds notice if permalinks are set to default when virtual dir is enabled
-	 */
-	function wpro_reroute_permalink_notice(){
-		$message = 'WPRO Virtual Upload Directory was enabled but permalinks for this site was set to <strong>Default</strong>. For the Virtual Upload Directory to work, select a custom permalink other than <strong>Default</strong>.';
-
-		echo '<div id="admin-settings-warning-box" class="update-nag"><p><strong>Warning</strong> – '.$message.'</p></div>';
-	}
-
-	/**
-	 * Functions for mapping to the virtual directory
-	 */
-	/**
-	 * function wpro_reroute_add_query_vars
-	 * add the custom query vars for fetching the format
-	 */
-	function wpro_reroute_add_query_vars($query_vars){
-		$query_vars[] = 'uploads';
-		$query_vars[] = 'year';
-		$query_vars[] = 'month'; 
-		//$query_vars[] = 'day';
-		$query_vars[] = 'file';
-    	return $query_vars;
-	}
-
-	/**
-	 * function wpro_reroute_parse_request
-	 *
-	 * The function that will evaluate the new route and redirect to public.php file that will process the file
-	 */
-	function wpro_reroute_parse_request(&$wp){
-		if ( array_key_exists( 'uploads', $wp->query_vars ) ) {
-        	include( dirname( __FILE__ ) . '/public.php' );
-        	exit();
-    	}
-	}
-
-	/**
-	 * For every upload, revert back to S3 directory
-	 */
-	function wpro_reroute_remove_virtual_dir($param){
-		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
-		return $param;
-	}
-
-	/**
-	 * For reference to image edit, revert back to S3 directory
-	 */
-	function wpro_reroute_load_image_to_edit_path($filepath){
-		//revert back to S3 directory
-		remove_filter('upload_dir', array($this, 'wpro_reroute_upload_dir'));
-		$upload_dir = wp_upload_dir();
-
-		$s3_upload_dir = $upload_dir['baseurl'];
-
-		$pattern = get_site_url() . '/' .$this->virtual_upload_dir;
-
-		//use s3 dir as the $filepath
-		$filepath = str_replace($pattern, $s3_upload_dir, $filepath);
-
-		$this->debug('WordpressReadOnly::load_image_to_edit_path("' . $filepath . '");');
-
-		//create tmp file
-		if (substr($filepath, 0, 7) == 'http://') {
-
-			$ending = '';
-			if (preg_match('/\.([^\.\/]+)$/', $filepath, $regs)) $ending = '.' . $regs[1];
-
-			$tmpfile = $this->tempdir . 'wpro' . time() . rand(0, 999999) . $ending;
-			while (file_exists($tmpfile)) $tmpfile = $this->tempdir . 'wpro' . time() . rand(0, 999999) . $ending;
-
-			$filepath = $this->url_normalizer($filepath);
-
-			$this->debug('-> Loading file from: ' . $filepath);
-			$this->debug('-> Storing file at: ' . $tmpfile);
-
-			$ch = curl_init();
-			curl_setopt($ch, CURLOPT_URL, $filepath);
-			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-			curl_setopt($ch, CURLOPT_AUTOREFERER, true);
-
-			$fh = fopen($tmpfile, 'w');
-			fwrite($fh, curl_exec_follow($ch));
-			fclose($fh);
-
-			$this->removeTemporaryLocalData($tmpfile);
-
-			return $tmpfile;
-		}
-
-		return $filepath;
-	}
-
-	/**
-	 * Changes the upload directory to the virtual one
-	 */
-	function wpro_reroute_upload_dir($data){
-		//apply the routes
-		$this->wpro_route_activate();
-
-		//replace with virtual directory
-		$site_url = get_site_url();
-
-
-		$data['baseurl'] = $site_url . '/'. $this->virtual_upload_dir;
-
-		//check the referer and add some hooks
-		$url_parsed = parse_url(wp_get_referer());
-		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
-		
-		//hook for background image directory (using relative path)
-		if(isset($url_parts['page'])){
-			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
-				$data['baseurl'] =  $site_url . '/'. $this->virtual_upload_dir;
-			}
-		}
-
-		$data['url'] = $data['baseurl'] . $data['subdir'];
-		
-		return $data;
-
-	}
-
-	/**
-	 * After file edit, if there is a virtual directory setup, url should point to the virtual one.
-	 */
-	function wpro_reroute_get_attachment_url($data){
-		$upload_dir = wp_upload_dir();
-
-		$s3_upload_dir = $upload_dir['baseurl'];
-
-		$pattern = $s3_upload_dir;
-
-		$mapped = get_site_url() . '/' .$this->virtual_upload_dir;
-
-		//check the referer and add some hooks
-		$url_parsed = parse_url(wp_get_referer());
-		if(isset($url_parsed['query'])) parse_str($url_parsed['query'], $url_parts);
-		
-		//hook for background image directory (using relative path)
-		if(isset($url_parts['page'])){
-			if($url_parts['page']=='custom-background' && $_SERVER['REQUEST_URI']!== '/wp-admin/upload.php'){
-				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;		
-			}
-		}
-
-		$data = str_replace($s3_upload_dir,$mapped, $data);
-
-		return $data;
-
-	}
-
-	function wpro_reroute_customize_register($wp_customize){
-		//handle background changes
-		$wp_upload_dir = wp_upload_dir();
-		$s3_upload_dir = $wp_upload_dir['baseurl'];
-		$pattern = $s3_upload_dir;
-		
-
-		$backgrounds = get_posts( array(
-			'post_type'  => 'attachment',
-			'meta_key'   => '_wp_attachment_is_custom_background',
-			'meta_value' => $wp_customize->get_stylesheet(),
-			'orderby'    => 'none',
-			'nopaging'   => true,
-		) );
-		
-		foreach($backgrounds as $background){
-			if($this->virtual_upload_dir){
-				//Get S3 url
-				if (wpro_get_option('wpro-aws-virthost')) {
-					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
-				} else {
-					$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
-				}
-				$mapped = get_site_url(). '/' .$this->virtual_upload_dir;
-				
-				
-				if(strpos($background->guid,$mapped)==FALSE){
-					$background->guid = str_replace($s3_url,$mapped, $background->guid);
-					wp_update_post($background);
-				}
-			}else{
-				if(strpos($background->guid,$s3_upload_dir)==false){
-					$background->guid = $s3_upload_dir.(substr($background->guid, strpos($background->guid,$wp_upload_dir['subdir'])));
-					wp_update_post($background);
-				}
-			}
-		}
-	}
-
-	function wpro_add_attachment($id){
-		$url_parsed = parse_url(wp_get_referer());
-		if($this->virtual_upload_dir && isset($url_parsed['path']) && $url_parsed['path'] == '/wp-admin/customize.php'){
-			$upload_dir = wp_upload_dir();
-			$s3_upload_dir = $upload_dir['baseurl'];
-			$pattern = $s3_upload_dir;
-			$mapped = get_site_url().'/' .$this->virtual_upload_dir;
-			$post=get_post($id);
-			$post->guid = str_replace($s3_upload_dir,$mapped, $post->guid);
-			wp_update_post($post);
-		}
-	}
-
+	
 	/**
 	* Function to change the background image url for mapped directories
 	*
@@ -1117,8 +809,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 
 	function remove_background_url($buffer) 
 	{
+		global $current_site, $current_blog;
+
 		if ($this->virtual_upload_dir){
-			$upload_dir = wp_upload_dir();
+			
 			//check if S3
 			if (wpro_get_option('wpro-aws-virthost')) {
 				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '/' . trim(wpro_get_option('wpro-folder'))), '/');
@@ -1126,11 +820,10 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 				$s3_url = 'http://' . trim(str_replace('//', '/', wpro_get_option('wpro-aws-bucket') . '.s3.amazonaws.com/' . trim(wpro_get_option('wpro-folder'))), '/');
 			}
 
-			if(strpos($buffer,$s3_url)){
-				return str_replace('background-image: url(\''.$s3_url, 'background-image: url(\'/'.$this->virtual_upload_dir, $buffer);	
-			}else{
-				return preg_replace('/background-image: url\(\'(http|https|ftp|ftps)\:\/\/[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,3}(\/\S*)?\//','background-image: url(\'/'.$this->virtual_upload_dir . $upload_dir['subdir'].'/',$buffer);
-			}
+			//$s3_url = "http://".$s3_url;
+			$buffer = str_replace($s3_url, 'http://'.$current_blog->domain.'/'.$this->virtual_upload_dir, $buffer);
+			
+			return $buffer;
 		}else{
 			return $buffer;
 		}
