@@ -779,8 +779,8 @@ class WordpressReadOnly extends WordpressReadOnlyGeneric {
 	 * Contains action/filter hooks to map the virtual directory
 	 */
 	function wpro_activate_directory_mapping(){
-		add_action('wp_head', array($this,'wpro_reroute_buffer_start'));
-		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'));
+		add_action('wp_head', array($this,'wpro_reroute_buffer_start'),1);
+		add_action('wp_footer', array($this,'wpro_reroute_buffer_end'),100);
 	}
 	
 	/**
